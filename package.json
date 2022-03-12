@@ -1,7 +1,7 @@
 {
-  "name": "storyblok-types-generator",
+  "name": "@brbndigital/storyblok-type-generator",
   "description": "",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Sebastian Inman <sebastian@brbndigital.com> (https://www.brbndigital.com)",
   "license": "MIT",
   "homepage": "https://github.com/brbnDigital/storyblok-type-generator#readme",
@@ -14,9 +14,10 @@
   },
   "main": "lib/index.js",
   "scripts": {
-      "build": "tsc --build",
-      "clean": "tsc --build --clean",
-      "watch": "tsc --watch"
+    "build": "tsc --build",
+    "clean": "tsc --build --clean",
+    "watch": "tsc --watch",
+    "publish": "npm publish --access=public"
   },
   "directories": {
     "lib": "lib"

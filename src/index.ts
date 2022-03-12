@@ -1,156 +1,161 @@
 import fs from "fs"
 import path from "path"
 
-import { format } from "prettier"
+import CamelCase from "camelcase"
+import Prettier from "prettier"
 import { compile } from "json-schema-to-typescript"
-import camelcase from "camelcase"
-import Storyblok from "./storyblok"
+import StoryblokClient from "storyblok-js-client"
 
-type Options = {
+type GeneratorOptions = {
     outputFile?: string
     namespace?: string
-    exports?: boolean
 }
 
-export default class StoryblokTypeGenerator {
+const STORYBLOK_API: string = "https://api.storyblok.com/v1"
 
-    private static DEFAULTS: Partial<Options> = {
-        namespace: "Storyblok",
-        outputFile: "src/generated/storyblok.d.ts",
-        exports: false
+const DEFAULT_OPTIONS: Partial<GeneratorOptions> = {
+    outputFile: "src/generated/storyblok.d.ts",
+    namespace: "Storyblok"
+}
+
+export async function GenerateTypes(accessToken: string, spaceID: string, options?: GeneratorOptions) {
+
+
+    // Exit if no Access Token or Space ID are provided.
+    if(!accessToken || !spaceID) return Promise.reject("Access Token and Space ID are required")
+
+
+    let storyblokSpaceID = spaceID
+    let generatorOptions = {...DEFAULT_OPTIONS, ...options}
+
+    let groupUUIDs: any = {}
+    let components: any[] = []
+
+    let schema: any[] = []
+    let output: string = ""
+
+
+    // Establish a connection to the Storyblok API.
+    let storyblokClient = new StoryblokClient({ oauthToken: accessToken }, STORYBLOK_API)
+
+    await Generate()
+
+
+    /**
+     * Gets the group name of the Blok.
+     * @param groups 
+     * @param uuid 
+     * @returns string
+     */
+
+    function GroupName(groups: any[], uuid: string): string {
+        const exists = groups.filter((group: any) => group.uuid === uuid)
+        if(exists.length) return exists[0].name
+        return ""
     }
 
-    private _client: Storyblok
-    private _options: Options
 
-    private _schema: any[] = []
-    private _groupUUIDs: any
-    private _components: any
+    /**
+     * Fetch all available component groups from Storyblok.
+     * @returns 
+     */
+    async function GetAllComponentGroups(): Promise<any[]> {
+        let data = await storyblokClient.get(`spaces/${storyblokSpaceID}/component_groups`)
+        return data.data.component_groups || []
+    }
 
-    private constructor(accessToken: string) {
 
-        this._client = new Storyblok(accessToken)
+    /**
+     * Fetches all available components from Storyblok.
+     * @returns 
+     */
+
+    async function GetAllComponents(): Promise<any[]> {
+        let data = await storyblokClient.get(`spaces/${storyblokSpaceID}/components`)
+        return data.data.components || []
+    }
+
+
+    /**
+     * 
+     * @returns array
+     */
+
+    async function Components(): Promise<any[]> {
+
+        const groups = await GetAllComponentGroups()
+        const components = await GetAllComponents()
+
+        components.forEach(component => {
+            if(component.component_group_uuid) {
+                component.component_group_name = GroupName(groups, component.component_group_uuid)
+            }
+        })
+
+        return components
 
     }
 
-    public static async Connect(accessToken: string): Promise<StoryblokTypeGenerator> {
+    async function Generate() {
 
-        return new StoryblokTypeGenerator(accessToken)
+        groupUUIDs = {}
+        components = await Components()
+
+        components.forEach(component => {
+            if(component.component_group_uuid) {
+                if(!groupUUIDs[component.component_group_uuid]) {
+                    groupUUIDs[component.component_group_uuid] = []
+                }
+                groupUUIDs[component.component_group_uuid].push(CamelCase(component.name, {
+                    pascalCase: true
+                }))
+            }
+        })
+
+        await GenerateSchema()
+
+        WriteFile()
 
     }
 
-    public async Generate(spaceId: number | string, options?: Options) {
 
-        this._client.spaceId = spaceId
-        this._options = {...StoryblokTypeGenerator.DEFAULTS, ...options}
+    async function GenerateSchema() {
 
-        try {
+        for(const component of components) {
 
-            this._groupUUIDs = {}
-            this._components  = await this._client.PullComponents()
-
-            this._components.forEach(value => {
-                if(value.component_group_uuid) {
-                    if (!this._groupUUIDs[value.component_group_uuid]) {
-                        this._groupUUIDs[value.component_group_uuid] = []
+            const obj: any = {
+                $id: `#/${component.name}`,
+                title: component.name,
+                type: "object",
+                required: ['_uid', 'component'],
+                properties: {...Parse(component.schema, component.name), ... {
+                    _uid: {
+                        type: "string"
+                    },
+                    component: {
+                        type: "string",
+                        enum: [component.name]
                     }
-                    this._groupUUIDs[value.component_group_uuid].push(camelcase(value.name, {
-                        pascalCase: true
-                    }))
+                }}
+            }
+
+            Object.keys(component.schema).forEach(key => {
+                if(component.schema[key].required) {
+                    obj.required.push(key)
                 }
             })
-
-            await this.GenerateSchema()
-
-            let output = this._schema.join("\n")
-
-            if(this._options.namespace) {
-                output = `namespace ${this._options.namespace} {
-
-                    ${output}
-
-                }`
-            }
-
-            if(!this._options.exports) {
-                output = output.replaceAll("export ", "")
-            }
-
-            output = format(output, {
-                parser: "typescript"
-            })
-
-            this.WriteFile(output)
-            
-
-        } catch(error) {
-
-            return Promise.reject(error)
-
-        }
-
-    }
-
-    private WriteFile(data: string) {
-
-        const dirname: string = path.dirname(this._options.outputFile)
-
-        if(!fs.existsSync(dirname)) {
-            fs.mkdirSync(dirname, { recursive: true })
-        }
-
-        fs.writeFileSync(this._options.outputFile, data)
-
-    }
-
-    private async GenerateSchema() {
-
-        for(const values of this._components) {
-
-            const obj: any = {}
-
-            obj.$id = `#/${values.name}`
-            obj.title = values.name
-            obj.type = 'object'
-            obj.properties = this.TypeMapper(values.schema, obj.title)
-            obj.properties._uid = {
-                type: 'string'
-            }
-
-            obj.properties.component = {
-                type: 'string',
-                enum: [values.name]
-            }
-
-            if (values.name === 'global' || values.name === 'page') {
-                obj.properties.uuid = {
-                    type: 'string'
-                }
-            }
-
-            const requiredFields = ['_uid', 'component']
-
-            Object.keys(values.schema).forEach(key => {
-                if (values.schema[key].required) {
-                    requiredFields.push(key)
-                }
-            })
-
-            if (requiredFields.length) {
-                obj.required = requiredFields
-            }
 
             try {
 
-                const ts = await compile(obj, values.name, {
+                const type = await compile(obj, component.name, {
                     unknownAny: false,
-                    bannerComment: '',
+                    bannerComment: "",
                     unreachableDefinitions: true
                 })
 
-                this._schema.push(ts)
+                schema.push(type)
 
-            } catch (error) {
+            } catch(error) {
 
                 return Promise.reject(error)
 
@@ -160,18 +165,19 @@ export default class StoryblokTypeGenerator {
 
     }
 
-    private TypeMapper(schema: any, title: string) {
+
+    function Parse(schema: any, title: string) {
 
         const parseObj: any = {}
-
+    
         Object.keys(schema).forEach(key => {
-
+    
             const obj: any = {}
             const schemaElement = schema[key]
             const type = schemaElement.type
-
+    
             if(type === "multilink") {
-
+    
                 Object.assign(parseObj, {
                     [key]: {
                         'oneOf': [{
@@ -229,9 +235,9 @@ export default class StoryblokTypeGenerator {
                         }]
                     }
                 })
-
+    
             } else if(type === "asset") {
-
+    
                 Object.assign(parseObj, {
                     [key]: {
                         type: 'object',
@@ -259,9 +265,9 @@ export default class StoryblokTypeGenerator {
                         additionalProperties: false
                     }
                 })
-
+    
             } else if(type === "multiasset") {
-
+    
                 Object.assign(parseObj, {
                     [key]: {
                         type: 'array',
@@ -292,25 +298,25 @@ export default class StoryblokTypeGenerator {
                         }
                     }
                 })
-
+    
             }
-
-            const schemaType = this.ParseType(type)
-
+    
+            const schemaType = ParseType(type)
+    
             if(!schemaType) return
-
+    
             obj[key] = {
                 type: schemaType
             }
-
+    
             if (schemaElement.options && schemaElement.options.length) {
-
+    
                 const items = schemaElement.options.map((item: any) => item.value)
         
                 if (type === 'option' && schemaElement.exclude_empty_option !== true) {
                     items.unshift('')
                 }
-
+    
                 if (schemaType === 'string') {
                     obj[key].enum = items
                 } else {
@@ -318,92 +324,139 @@ export default class StoryblokTypeGenerator {
                         enum: items
                     }
                 }
-
+    
             }
-
+    
             if (type === 'bloks') {
-
+    
                 if (schemaElement.restrict_components) {
-
+    
                     if (schemaElement.restrict_type === 'groups') {
-
+    
                         if (Array.isArray(schemaElement.component_group_whitelist) && schemaElement.component_group_whitelist.length) {
-
+    
                             let currentGroupElements = []
-
+    
                             schemaElement.component_group_whitelist.forEach(groupId => {
-
-                                const currentGroup = this._groupUUIDs[groupId]
-
+    
+                                const currentGroup = groupUUIDs[groupId]
+    
                                 if (Array.isArray(currentGroup)) {
                                     currentGroupElements = [...currentGroupElements, ...currentGroup]
                                 } else {
                                     console.log('Group has no members: ', groupId)
                                 }
-
+    
                             })
-
+    
                             obj[key].tsType = `(${currentGroupElements.join(' | ')})[]`
-
+    
                         }
-
+    
                     } else {
-
+    
                         if (Array.isArray(schemaElement.component_whitelist) && schemaElement.component_whitelist.length) {
-
-                            obj[key].tsType = `(${schemaElement.component_whitelist.map((i: string) => camelcase(i, { pascalCase: true })).join(' | ')})[]`
-
+    
+                            obj[key].tsType = `(${schemaElement.component_whitelist.map((i: string) => CamelCase(i, { pascalCase: true })).join(' | ')})[]`
+    
                         } else {
-
+    
                             console.log('No whitelisted component found')
-
+    
                         }
-
+    
                     }
-
+    
                 } else {
-
+    
                     console.log('Type: bloks array but not whitelisted (will result in all elements):', title)
-
+    
                 }
-
+    
             }
-
+    
             Object.assign(parseObj, obj)
-
+    
         })
-
+    
         return parseObj
-
+    
     }
-
-    private ParseType (type: string) {
+    
+    
+    
+    function ParseType(type: string) {
+    
         switch (type) {
+    
             case 'text':
                 return 'string'
+    
             case 'bloks':
                 return 'array'
+    
             case 'option':
                 return 'string'
+    
             case 'options':
                 return 'array'
+    
             case 'number':
                 return 'number'
+    
             case 'image':
                 return 'string'
+    
             case 'boolean':
                 return 'boolean'
+    
             case 'textarea':
                 return 'string'
+    
             case 'markdown':
                 return 'string'
+    
             case 'richtext':
                 return 'any'
+    
             case 'datetime':
                 return 'string'
+    
             default:
                 return null
+                
         }
+    
+    }
+
+
+    function FormatOutput() {
+
+        output = schema.join("\n")
+
+        if(generatorOptions.namespace) {
+            output = `namespace ${generatorOptions.namespace} { ${output} }`
+        }
+
+        output = Prettier.format(output, {
+            parser: "typescript"
+        })
+        
+    }
+
+
+    function WriteFile() {
+
+        FormatOutput()
+
+        const dirname: string = path.dirname(generatorOptions.outputFile)
+
+        if(!fs.existsSync(dirname)) {
+            fs.mkdirSync(dirname, { recursive: true })
+        }
+
+        fs.writeFileSync(generatorOptions.outputFile, output)
+
     }
 
 }
