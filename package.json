@@ -1,0 +1,35 @@
+{
+  "name": "storyblok-types-generator",
+  "description": "",
+  "version": "1.0.0",
+  "author": "Sebastian Inman <sebastian@brbndigital.com> (https://www.brbndigital.com)",
+  "license": "MIT",
+  "homepage": "https://github.com/brbnDigital/storyblok-type-generator#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brbnDigital/storyblok-type-generator.git"
+  },
+  "bugs": {
+    "url": "https://github.com/brbnDigital/storyblok-type-generator/issues"
+  },
+  "main": "lib/index.js",
+  "scripts": {
+      "build": "tsc --build",
+      "clean": "tsc --build --clean",
+      "watch": "tsc --watch"
+  },
+  "directories": {
+    "lib": "lib"
+  },
+  "types": "./lib/index.d.ts",
+  "devDependencies": {
+    "@types/node": "^17.0.21",
+    "typescript": "^4.6.2"
+  },
+  "dependencies": {
+    "camelcase": "^6.3.0",
+    "json-schema-to-typescript": "^10.1.5",
+    "prettier": "^2.5.1",
+    "storyblok-js-client": "^4.2.1"
+  }
+}
